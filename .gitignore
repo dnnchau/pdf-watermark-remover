@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Packaging output
+build/
+dist/
+*.egg-info/
+
+# Local UI/manual test artifacts
+ui-*.png
+ui-sample.pdf

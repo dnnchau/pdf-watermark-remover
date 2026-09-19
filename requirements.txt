@@ -1,0 +1,6 @@
+pymupdf>=1.24
+pillow>=10.0
+numpy>=1.26
+PySide6>=6.6
+pytest>=8.0
+pyinstaller>=6.0
