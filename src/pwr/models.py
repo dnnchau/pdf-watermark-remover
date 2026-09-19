@@ -88,6 +88,19 @@ class Hit:
 
 
 @dataclass(frozen=True)
+class ManualRegion:
+    """A user-drawn area applied only to the selected zero-based pages."""
+
+    rect: Rect
+    pages: tuple[int, ...]
+    scope: str = ""
+    risk_count: int = 0
+
+    def applies_to(self, page_no: int) -> bool:
+        return page_no in self.pages
+
+
+@dataclass(frozen=True)
 class Candidate:
     """A repeated element the user may choose to remove."""
 

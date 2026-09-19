@@ -10,7 +10,7 @@ import pymupdf
 
 from .detect import page_items
 from .fingerprint import image_key, image_sig, is_stub_image, to_rect
-from .models import Candidate, MarkKind, Progress, ProgressCb, Rect, RunReport
+from .models import Candidate, ManualRegion, MarkKind, Progress, ProgressCb, Rect, RunReport
 
 
 @dataclass(frozen=True)
@@ -164,18 +164,17 @@ def apply_to_page(
     image_keys: set[str],
     mark_groups: list[MarkGroup],
     aggressive: bool = False,
+    manual_rects: list[Rect] | None = None,
 ) -> tuple[int, int, list[str]]:
     """Remove the selected marks from one page. Returns (images, areas, warnings)."""
     images_removed = _remove_images(doc, page, image_keys) if image_keys else 0
     areas = 0
     warnings: list[str] = []
 
-    if not mark_groups:
+    if not mark_groups and not manual_rects:
         return images_removed, areas, warnings
 
-    matches = _match_page(page, mark_groups)
-    if not matches:
-        return images_removed, areas, warnings
+    matches = _match_page(page, mark_groups) if mark_groups else []
     areas = len(matches)
 
     # Pass 1 - text. Two rules keep page content safe here:
@@ -217,6 +216,20 @@ def apply_to_page(
             graphics=mode,
             text=pymupdf.PDF_REDACT_TEXT_NONE,
         )
+
+    # Manual regions intentionally remove everything they cover. The UI performs
+    # a sampled content-risk check and asks for confirmation before this path runs.
+    if manual_rects:
+        for rect in manual_rects:
+            page.add_redact_annot(
+                pymupdf.Rect(*rect.as_tuple()), fill=(1, 1, 1), cross_out=False
+            )
+        page.apply_redactions(
+            images=pymupdf.PDF_REDACT_IMAGE_REMOVE,
+            graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
+            text=pymupdf.PDF_REDACT_TEXT_REMOVE,
+        )
+        areas += len(manual_rects)
     return images_removed, areas, warnings
 
 
@@ -231,13 +244,15 @@ class RemovalExecutor:
         src: str,
         dst: str,
         candidates: list[Candidate],
+        manual_regions: list[ManualRegion] | None = None,
         on_progress: ProgressCb | None = None,
         cancel: threading.Event | None = None,
         allow_overwrite: bool = False,
         expected_size: int | None = None,
         expected_mtime: float | None = None,
     ) -> RunReport:
-        if not candidates:
+        manual_regions = manual_regions or []
+        if not candidates and not manual_regions:
             raise ValueError("Chưa chọn watermark nào để xóa.")
         if os.path.abspath(src) == os.path.abspath(dst) and not allow_overwrite:
             raise ValueError("File xuất trùng file gốc. Hãy đổi tên hoặc thư mục xuất.")
@@ -275,7 +290,12 @@ class RemovalExecutor:
                     raise Cancelled()
 
                 removed, areas, page_warnings = apply_to_page(
-                    doc, page, image_keys, mark_groups, self.aggressive_line_art
+                    doc,
+                    page,
+                    image_keys,
+                    mark_groups,
+                    self.aggressive_line_art,
+                    [region.rect for region in manual_regions if region.applies_to(index)],
                 )
                 images_removed += removed
                 areas_redacted += areas

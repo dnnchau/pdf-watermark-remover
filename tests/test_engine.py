@@ -3,9 +3,18 @@ import os
 import pymupdf
 import pytest
 
-from pwr import MarkKind, RemovalExecutor, analyze, compare_pages, default_output_path
+from pwr import (
+    ManualRegion,
+    MarkKind,
+    Rect,
+    RemovalExecutor,
+    analyze,
+    assess_manual_region,
+    compare_pages,
+    default_output_path,
+    parse_page_scope,
+)
 from pwr.fingerprint import ImageSig, cluster_key, image_sig, is_stub_image, text_norm
-from pwr.models import Rect
 from pwr.pipeline import sample_pages
 
 
@@ -79,6 +88,33 @@ class TestSampling:
         assert picked[0] == 0
         assert picked[-1] == 289
         assert picked == sorted(set(picked))
+
+
+class TestManualRegions:
+    def test_page_scope_supports_ranges_and_keywords(self):
+        assert parse_page_scope("1-3, 6", 8, 0) == (0, 1, 2, 5)
+        assert parse_page_scope("tất cả", 4, 0) == (0, 1, 2, 3)
+        assert parse_page_scope("lẻ", 5, 0) == (0, 2, 4)
+        assert parse_page_scope("", 5, 3) == (3,)
+
+    def test_manual_region_only_removes_selected_pages(self, clean_pdf, tmp_path):
+        region = ManualRegion(Rect(60, 105, 240, 175), (1,), "2")
+        dst = str(tmp_path / "manual.pdf")
+
+        RemovalExecutor().run(clean_pdf, dst, [], manual_regions=[region])
+
+        doc = pymupdf.open(dst)
+        try:
+            assert "Question 1" in doc[0].get_text()
+            assert "Question 2" not in doc[1].get_text()
+            assert "Question 3" in doc[2].get_text()
+        finally:
+            doc.close()
+
+    def test_manual_region_reports_content_risk(self, clean_pdf):
+        region = ManualRegion(Rect(60, 105, 240, 175), (0, 1), "1-2")
+        risk = assess_manual_region(clean_pdf, region)
+        assert risk.text_hits >= 2
 
 
 class TestDetection:

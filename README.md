@@ -25,9 +25,13 @@ Hoặc build ra file .exe độc lập:
    (vd "góc trên-trái"), số trang xuất hiện và độ tin cậy. Chỉ thẻ có dấu hiệu watermark rõ ràng
    mới ở trạng thái **SẼ XÓA** sẵn.
 3. Bấm **khung trên trang xem trước** hoặc bấm thẻ để đổi giữa *SẼ XÓA* và *Giữ lại*.
-   Nút **Xem kết quả sau khi xóa** cho thấy trang sẽ trông thế nào.
-4. Bấm **XÓA WATERMARK**. File mới được ghi ra `<tên>_clean.pdf`, **file gốc không bị đụng tới**.
-5. Sau khi chạy, phần mềm tự đối chiếu pixel vài trang mẫu và báo phần trăm thay đổi ngoài vùng
+   Kéo thanh **GỐC ↔ SAU XÓA** để so sánh trực tiếp hai phiên bản.
+4. Nếu máy không phát hiện được watermark, bấm **Vẽ vùng xóa**, khoanh vùng trên trang rồi nhập
+   phạm vi như `1-5,8`, `tất cả`, `lẻ` hoặc `chẵn`. Ứng dụng sẽ báo trước nếu vùng này chạm chữ,
+   ảnh hay nét vẽ của tài liệu.
+5. Dùng **Lưu preset** để tái sử dụng cùng cách chọn và vùng xóa cho các PDF có bố cục tương tự.
+6. Bấm **XÓA WATERMARK**. File mới được ghi ra `<tên>_clean.pdf`, **file gốc không bị đụng tới**.
+7. Sau khi chạy, phần mềm tự đối chiếu pixel vài trang mẫu và báo phần trăm thay đổi ngoài vùng
    watermark (phải là ~0%).
 
 ## Dòng lệnh
@@ -46,6 +50,7 @@ python -m pwr_cli verify  "goc.pdf" "out.pdf"        # đối chiếu pixel
 | Ảnh chèn (PNG trong suốt, xoay chéo…) | Xóa đúng đối tượng ảnh đó khỏi từng trang |
 | Chữ lặp lại (vd "Click to BUY NOW!") | Redaction từng phần chữ của watermark, **giữ nguyên ảnh scan bên dưới** |
 | Hình vector (huy hiệu, khung) | Redaction xóa nét vẽ nằm trọn trong vùng watermark |
+| Vùng vẽ thủ công | Xóa toàn bộ nội dung trong vùng trên đúng phạm vi trang đã chọn |
 
 ### Quy tắc bảo vệ nội dung
 
