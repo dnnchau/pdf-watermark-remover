@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from pwr import AnalyzeReport
+from pwr import AnalyzeReport, ManualRegion
 
 from . import theme
 from .panel_header import PanelHeader
@@ -58,6 +58,7 @@ class FileEntry:
     status: Status = Status.PENDING
     report: AnalyzeReport | None = None
     selected: set[str] = field(default_factory=set)
+    manual_regions: list[ManualRegion] = field(default_factory=list)
     message: str = ""
     output: str = ""
 
@@ -114,7 +115,8 @@ class QueueRow(QFrame):
     def update_entry(self, entry: FileEntry) -> None:
         detail = entry.message or entry.status.value
         if entry.status is Status.READY and entry.report is not None:
-            detail = f"{entry.report.doc.page_count} trang · chọn {len(entry.selected)} mục"
+            total = len(entry.selected) + len(entry.manual_regions)
+            detail = f"{entry.report.doc.page_count} trang · chọn {total} mục"
         self.mark.setText(STATUS_MARK[entry.status])
         self.mark.setStyleSheet(
             f"color: {STATUS_COLOR[entry.status]}; font-size: 14px; font-weight: 700;"

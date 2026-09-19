@@ -8,7 +8,16 @@ import random
 import pymupdf
 
 from .detect import count_image_pages, detect_images, detect_marks
-from .models import AnalyzeReport, Candidate, DocInfo, MarkKind, Progress, ProgressCb, Rect
+from .models import (
+    AnalyzeReport,
+    Candidate,
+    DocInfo,
+    ManualRegion,
+    MarkKind,
+    Progress,
+    ProgressCb,
+    Rect,
+)
 from .scoring import score_all
 
 SAMPLE_BUDGET = 24
@@ -60,7 +69,11 @@ def render_page_png(
 
 
 def render_page_after(
-    path: str, page_no: int, candidates: list[Candidate], dpi: int = 100
+    path: str,
+    page_no: int,
+    candidates: list[Candidate],
+    manual_regions: list[ManualRegion] | None = None,
+    dpi: int = 100,
 ) -> bytes:
     """Render one page as it will look once the selection is removed."""
     from .remove import apply_to_page, selection_keys
@@ -69,7 +82,15 @@ def render_page_after(
     doc = pymupdf.open(path)
     try:
         page = doc[page_no]
-        apply_to_page(doc, page, image_keys, mark_groups)
+        apply_to_page(
+            doc,
+            page,
+            image_keys,
+            mark_groups,
+            manual_rects=[
+                region.rect for region in (manual_regions or []) if region.applies_to(page_no)
+            ],
+        )
         page = doc.reload_page(page)
         return page.get_pixmap(dpi=dpi).tobytes("png")
     finally:

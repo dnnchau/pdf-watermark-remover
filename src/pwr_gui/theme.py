@@ -55,6 +55,18 @@ QLabel#FormLabel {{
     letter-spacing: 0.5px;
 }}
 QLabel#PageCounter {{ color: #b8c7d6; font-size: 12px; padding: 0 6px; }}
+QLabel#CompareLabel {{
+    color: {TEXT_DIM};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+}}
+QLabel#SafetyStatus {{
+    color: {OK};
+    background: transparent;
+    font-size: 11px;
+}}
+QLabel#SafetyStatus[warning="true"] {{ color: {DANGER}; }}
 QLabel#PreviewEmpty {{
     background: {CANVAS};
     border: 1px solid {BORDER};
@@ -151,11 +163,44 @@ QProgressBar {{
     color: transparent;
 }}
 QProgressBar::chunk {{ background: {ACCENT}; border-radius: 4px; }}
+QSlider::groove:horizontal {{
+    height: 4px;
+    background: #2a3a4c;
+    border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {ACCENT};
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background: #f7f9fb;
+    border: 2px solid {ACCENT};
+    width: 15px;
+    height: 15px;
+    margin: -7px 0;
+    border-radius: 8px;
+}}
+QSlider::handle:horizontal:hover {{ background: {ACCENT_HOVER}; }}
+QSlider:disabled {{ opacity: 0.35; }}
 QLineEdit {{
     background: {INK};
     border: 1px solid {BORDER};
     border-radius: 8px;
     padding: 8px 11px;
+    selection-background-color: {ACCENT_DIM};
+}}
+QComboBox {{
+    background: {INK};
+    border: 1px solid {BORDER};
+    border-radius: 7px;
+    padding: 6px 9px;
+    color: {TEXT};
+}}
+QComboBox:hover, QComboBox:focus {{ border-color: {ACCENT}; }}
+QComboBox::drop-down {{ border: none; width: 18px; }}
+QComboBox QAbstractItemView {{
+    background: {SURFACE_RAISED};
+    border: 1px solid {BORDER};
     selection-background-color: {ACCENT_DIM};
 }}
 QLineEdit:hover {{ border-color: #3b526b; }}

@@ -16,6 +16,8 @@ from pwr_gui.main_window import MainWindow  # noqa: E402
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     pdf = sys.argv[1]
     out = sys.argv[2] if len(sys.argv) > 2 else "window.png"
 

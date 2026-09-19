@@ -6,7 +6,7 @@ import threading
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
-from pwr import AnalyzeReport, Candidate, RemovalExecutor, RunReport, analyze
+from pwr import AnalyzeReport, Candidate, ManualRegion, RemovalExecutor, RunReport, analyze
 from pwr.models import Progress
 from pwr.pipeline import render_page_after, render_page_png
 from pwr.remove import Cancelled
@@ -62,6 +62,7 @@ class RemoveTask(_Task):
         path: str,
         dst: str,
         candidates: list[Candidate],
+        manual_regions: list[ManualRegion],
         report: AnalyzeReport,
         aggressive: bool = False,
     ) -> None:
@@ -69,6 +70,7 @@ class RemoveTask(_Task):
         self.path = path
         self.dst = dst
         self.candidates = candidates
+        self.manual_regions = manual_regions
         self.report = report
         self.aggressive = aggressive
         self.cancel = threading.Event()
@@ -80,6 +82,7 @@ class RemoveTask(_Task):
                 self.path,
                 self.dst,
                 self.candidates,
+                manual_regions=self.manual_regions,
                 on_progress=self.signals.progress.emit,
                 cancel=self.cancel,
                 expected_size=self.report.doc.size_bytes,
@@ -116,28 +119,38 @@ class RenderTask(_Task):
     """Renders one page, optionally as it will look after removal."""
 
     def __init__(
-        self, path: str, page_no: int, candidates: list[Candidate] | None, token: int
+        self,
+        path: str,
+        page_no: int,
+        candidates: list[Candidate],
+        manual_regions: list[ManualRegion],
+        token: int,
     ) -> None:
         super().__init__()
         self.path = path
         self.page_no = page_no
         self.candidates = candidates
+        self.manual_regions = manual_regions
         self.token = token
 
     @Slot()
     def run(self) -> None:
         try:
-            if self.candidates:
-                png = render_page_after(self.path, self.page_no, self.candidates)
-            else:
-                import pymupdf
+            import pymupdf
 
-                doc = pymupdf.open(self.path)
-                try:
-                    png = render_page_png(doc, self.page_no)
-                finally:
-                    doc.close()
-            self.emit_done((self.token, self.page_no, png))
+            doc = pymupdf.open(self.path)
+            try:
+                before = render_page_png(doc, self.page_no)
+            finally:
+                doc.close()
+            after = None
+            if self.candidates or any(
+                region.applies_to(self.page_no) for region in self.manual_regions
+            ):
+                after = render_page_after(
+                    self.path, self.page_no, self.candidates, self.manual_regions
+                )
+            self.emit_done((self.token, self.page_no, before, after))
         except Exception as error:
             self.emit_failed(str(error))
 

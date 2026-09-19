@@ -10,9 +10,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QSplitter  # noqa: E402
 
+from pwr import Rect  # noqa: E402
 from pwr_gui.main_window import MainWindow  # noqa: E402
 from pwr_gui.panel_header import PanelHeader  # noqa: E402
 from pwr_gui.file_queue import QueueRow  # noqa: E402
+from pwr_gui.presets import PresetStore  # noqa: E402
 from pwr_gui import theme  # noqa: E402
 
 
@@ -77,6 +79,14 @@ def test_queue_row_can_remove_its_own_file(app, tmp_path):
     window.close()
 
 
+def test_preset_store_round_trip(tmp_path):
+    store = PresetStore(tmp_path / "presets.json")
+    store.save("Sách luyện thi", {"candidates": [{"key": "image:abc"}]})
+
+    assert store.names() == ["Sách luyện thi"]
+    assert store.load("Sách luyện thi")["candidates"][0]["key"] == "image:abc"
+
+
 def test_window_analyses_and_lists_candidates(app, marked_pdf, tmp_path):
     window = MainWindow()
     window.out_dir.setText(str(tmp_path))
@@ -97,6 +107,27 @@ def test_window_analyses_and_lists_candidates(app, marked_pdf, tmp_path):
 
     assert _pump(app, window, lambda: not window.preview.pixmap_item.pixmap().isNull())
     assert window.preview._boxes, "clickable mark boxes should be drawn on the page"
+    assert _pump(app, window, lambda: not window.preview.pixmap_item.after.isNull())
+    window.preview.compare_slider.setValue(50)
+    assert window.preview.pixmap_item.ratio == pytest.approx(0.5)
+
+    window.close()
+
+
+def test_manual_region_enables_cleanup_and_preview(app, clean_pdf):
+    window = MainWindow()
+    window._add([clean_pdf])
+
+    entry = window.queue.entry(os.path.abspath(clean_pdf))
+    assert _pump(app, window, lambda: entry.report is not None)
+    assert not entry.selected
+
+    window._add_manual_region(0, Rect(300, 700, 360, 760), "1-2")
+
+    assert entry.manual_regions[0].pages == (0, 1)
+    assert window.run_btn.isEnabled()
+    assert _pump(app, window, lambda: not window.preview.pixmap_item.after.isNull())
+    assert any(box.toolTip().startswith("Vùng thủ công") for box in window.preview._boxes)
 
     window.close()
 

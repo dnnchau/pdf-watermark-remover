@@ -6,6 +6,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -164,6 +165,8 @@ class CandidateCard(QFrame):
 class CandidatePicker(QWidget):
     selection_changed = Signal(set)
     card_focused = Signal(str)
+    save_preset_requested = Signal()
+    apply_preset_requested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -181,6 +184,17 @@ class CandidatePicker(QWidget):
         self.select_all.clicked.connect(lambda: self._set_all(True))
         self.select_none.clicked.connect(lambda: self._set_all(False))
 
+        self.preset_combo = QComboBox()
+        self.preset_combo.setPlaceholderText("Preset đã lưu")
+        self.apply_preset = QPushButton("Áp dụng")
+        self.apply_preset.setObjectName("Ghost")
+        self.save_preset = QPushButton("Lưu preset")
+        self.save_preset.setObjectName("Ghost")
+        self.apply_preset.clicked.connect(
+            lambda: self.apply_preset_requested.emit(self.preset_combo.currentText())
+        )
+        self.save_preset.clicked.connect(self.save_preset_requested.emit)
+
         self.summary.setWordWrap(True)
         self.setFixedWidth(CARD_W + 20)
 
@@ -189,6 +203,12 @@ class CandidatePicker(QWidget):
         buttons.addWidget(self.select_all)
         buttons.addWidget(self.select_none)
         buttons.addStretch(1)
+
+        presets = QHBoxLayout()
+        presets.setSpacing(4)
+        presets.addWidget(self.preset_combo, 1)
+        presets.addWidget(self.apply_preset)
+        presets.addWidget(self.save_preset)
 
         self.track = QWidget()
         self.track.setObjectName("CandidateTrack")
@@ -216,9 +236,17 @@ class CandidatePicker(QWidget):
         layout.addWidget(title)
         layout.addWidget(self.summary)
         layout.addLayout(buttons)
+        layout.addLayout(presets)
         layout.addWidget(self.empty, 1)
         layout.addWidget(self.scroll, 1)
         self.scroll.hide()
+
+    def set_presets(self, names: list[str]) -> None:
+        current = self.preset_combo.currentText()
+        self.preset_combo.clear()
+        self.preset_combo.addItems(names)
+        if current in names:
+            self.preset_combo.setCurrentText(current)
 
     def clear(self) -> None:
         for card in self._cards.values():

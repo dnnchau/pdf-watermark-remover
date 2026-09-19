@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QIcon, QPixmap
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QInputDialog,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -21,7 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pwr import AnalyzeReport, Candidate, RunReport
+from pwr import (
+    AnalyzeReport,
+    Candidate,
+    ManualRegion,
+    Rect,
+    RunReport,
+    assess_manual_region,
+    parse_page_scope,
+)
 from pwr.remove import DEFAULT_SUFFIX, default_output_path, unique_output_path
 
 from . import theme
@@ -29,6 +39,7 @@ from .candidate_picker import CandidatePicker
 from .file_queue import FileEntry, FileQueue, Status
 from .panel_header import PanelHeader
 from .preview_pane import PreviewPane
+from .presets import PresetStore
 from .resources import app_icon_path
 from .worker import AnalyzeTask, RemoveTask, RenderTask, VerifyTask
 
@@ -54,6 +65,7 @@ class MainWindow(QWidget):
         self.run_queue: list[FileEntry] = []
         self.active_remove: RemoveTask | None = None
         self.template_selection: list[Candidate] = []
+        self.template_manual: list[dict] = []
         self.template_was_auto = True
         self.run_active = False
         self.waiting_for: str | None = None
@@ -61,9 +73,11 @@ class MainWindow(QWidget):
         self.queue = FileQueue()
         self.preview = PreviewPane()
         self.picker = CandidatePicker()
+        self.preset_store = PresetStore()
 
         self._build_layout()
         self._wire()
+        self.picker.set_presets(self.preset_store.names())
 
     # -- layout ------------------------------------------------------------
 
@@ -223,7 +237,10 @@ class MainWindow(QWidget):
         self.picker.card_focused.connect(self._focus_candidate)
         self.preview.toggled.connect(self._toggle_key)
         self.preview.page_changed.connect(lambda _: self._render_current())
-        self.preview.mode_changed.connect(lambda _: self._render_current())
+        self.preview.manual_region_added.connect(self._add_manual_region)
+        self.preview.undo_manual_requested.connect(self._undo_manual_region)
+        self.picker.save_preset_requested.connect(self._save_preset)
+        self.picker.apply_preset_requested.connect(self._apply_preset)
 
     # -- input -------------------------------------------------------------
 
@@ -320,8 +337,9 @@ class MainWindow(QWidget):
         entry.report = report
         entry.status = Status.READY
         entry.selected = set(report.auto_selected_keys())
-        if then_remove and self.template_selection:
+        if then_remove and (self.template_selection or self.template_manual):
             entry.selected = self._match_template(report)
+            entry.manual_regions = self._manual_from_template(report)
         self.queue.update_entry(path)
 
         current = self.queue.current_entry()
@@ -340,8 +358,11 @@ class MainWindow(QWidget):
 
         if then_remove or self.waiting_for == path:
             self.waiting_for = None
-            if self.run_active and not entry.selected and self.template_selection:
-                entry.selected = self._match_template(report)
+            if self.run_active:
+                if not entry.selected and self.template_selection:
+                    entry.selected = self._match_template(report)
+                if not entry.manual_regions and self.template_manual:
+                    entry.manual_regions = self._manual_from_template(report)
             self._remove_entry(entry)
 
     def _match_template(self, report: AnalyzeReport) -> set[str]:
@@ -360,6 +381,49 @@ class MainWindow(QWidget):
             matched = set(report.auto_selected_keys())
         return matched
 
+    @staticmethod
+    def _manual_template(entry: FileEntry) -> list[dict]:
+        if entry.report is None:
+            return []
+        width = entry.report.doc.page_width or 1
+        height = entry.report.doc.page_height or 1
+        return [
+            {
+                "rect": [
+                    region.rect.x0 / width,
+                    region.rect.y0 / height,
+                    region.rect.x1 / width,
+                    region.rect.y1 / height,
+                ],
+                "scope": region.scope,
+            }
+            for region in entry.manual_regions
+        ]
+
+    def _manual_from_template(
+        self, report: AnalyzeReport, templates: list[dict] | None = None
+    ) -> list[ManualRegion]:
+        regions: list[ManualRegion] = []
+        for item in templates if templates is not None else self.template_manual:
+            values = item.get("rect", [])
+            if len(values) != 4:
+                continue
+            rect = Rect(
+                float(values[0]) * report.doc.page_width,
+                float(values[1]) * report.doc.page_height,
+                float(values[2]) * report.doc.page_width,
+                float(values[3]) * report.doc.page_height,
+            )
+            scope = str(item.get("scope") or "tất cả")
+            try:
+                pages = parse_page_scope(scope, report.doc.page_count, 0)
+            except (ValueError, TypeError):
+                continue
+            region = ManualRegion(rect, pages, scope)
+            risk = assess_manual_region(report.doc.path, region)
+            regions.append(replace(region, risk_count=risk.total))
+        return regions
+
     # -- display -----------------------------------------------------------
 
     def _show_file(self, path: str) -> None:
@@ -375,6 +439,8 @@ class MainWindow(QWidget):
         self.preview.set_document(
             report.doc.page_count, list(report.candidates), entry.selected
         )
+        self.preview.set_manual_regions(entry.manual_regions)
+        self._refresh_safety(entry)
         self.preview.go_to(self.preview.first_page_with_marks())
         self._render_current()
         self._refresh_run_button()
@@ -391,7 +457,8 @@ class MainWindow(QWidget):
         task = RenderTask(
             entry.path,
             self.preview.page_no,
-            selected if self.preview.show_after else None,
+            selected,
+            list(entry.manual_regions),
             token,
         )
         task.signals.done.connect(self._on_rendered)
@@ -399,10 +466,10 @@ class MainWindow(QWidget):
         self._keep(task)
         self.render_pool.start(task)
 
-    def _on_rendered(self, payload: tuple[int, int, bytes]) -> None:
-        token, page_no, png = payload
+    def _on_rendered(self, payload: tuple[int, int, bytes, bytes | None]) -> None:
+        token, page_no, before, after = payload
         if token == self.render_token:
-            self.preview.show_page(page_no, png)
+            self.preview.show_page(page_no, before, after)
 
     def _focus_candidate(self, key: str) -> None:
         entry = self.queue.current_entry()
@@ -424,8 +491,7 @@ class MainWindow(QWidget):
         self.preview.set_selection(entry.selected)
         self.queue.update_entry(entry.path)
         self._refresh_run_button()
-        if self.preview.show_after:
-            self._render_current()
+        self._render_current()
 
     def _toggle_key(self, key: str) -> None:
         entry = self.queue.current_entry()
@@ -439,21 +505,148 @@ class MainWindow(QWidget):
         self.preview.set_selection(entry.selected)
         self.queue.update_entry(entry.path)
         self._refresh_run_button()
+        self._render_current()
+
+    def _add_manual_region(self, page_no: int, rect: Rect, scope: str) -> None:
+        entry = self.queue.current_entry()
+        if entry is None or entry.report is None:
+            return
+        scope_label = scope.strip() or str(page_no + 1)
+        try:
+            pages = parse_page_scope(scope_label, entry.report.doc.page_count, page_no)
+        except (ValueError, TypeError) as error:
+            self.status.setText(str(error))
+            QMessageBox.warning(self, "Phạm vi trang không hợp lệ", str(error))
+            return
+        region = ManualRegion(rect, pages, scope_label)
+        risk = assess_manual_region(entry.path, region)
+        region = replace(region, risk_count=risk.total)
+        entry.manual_regions.append(region)
+        self.preview.set_manual_regions(entry.manual_regions)
+        self.preview.set_safety(risk.message(), bool(risk.total))
+        self.queue.update_entry(entry.path)
+        self.status.setText(risk.message())
+        self._refresh_run_button()
+        self._render_current()
+
+    def _undo_manual_region(self) -> None:
+        entry = self.queue.current_entry()
+        if entry is None or not entry.manual_regions:
+            return
+        entry.manual_regions.pop()
+        self.preview.set_manual_regions(entry.manual_regions)
+        self._refresh_safety(entry)
+        self.queue.update_entry(entry.path)
+        self._refresh_run_button()
+        self._render_current()
+
+    def _refresh_safety(self, entry: FileEntry) -> None:
+        risky = sum(region.risk_count for region in entry.manual_regions)
+        if risky:
+            self.preview.set_safety(
+                f"Cảnh báo: {risky} nội dung nằm trong vùng thủ công", True
+            )
+        elif entry.manual_regions:
+            self.preview.set_safety(
+                f"{len(entry.manual_regions)} vùng thủ công · chưa thấy xung đột", False
+            )
+        else:
+            self.preview.set_safety("Bảo vệ chữ tự động đang bật", False)
+
+    def _preset_payload(self, entry: FileEntry) -> dict:
+        if entry.report is None:
+            return {}
+        width = entry.report.doc.page_width or 1
+        height = entry.report.doc.page_height or 1
+        selected = [c for c in entry.report.candidates if c.key in entry.selected]
+        return {
+            "version": 1,
+            "candidates": [
+                {
+                    "key": candidate.key,
+                    "text": candidate.text.strip().lower(),
+                    "kind": candidate.kind.value,
+                    "center": [
+                        (candidate.rect.x0 + candidate.rect.x1) / 2 / width,
+                        (candidate.rect.y0 + candidate.rect.y1) / 2 / height,
+                    ],
+                }
+                for candidate in selected
+            ],
+            "manual": self._manual_template(entry),
+        }
+
+    def _save_preset(self) -> None:
+        entry = self.queue.current_entry()
+        if entry is None or entry.report is None or not (entry.selected or entry.manual_regions):
+            self.status.setText("Hãy chọn watermark hoặc vẽ vùng trước khi lưu preset.")
+            return
+        name, accepted = QInputDialog.getText(self, "Lưu preset", "Tên preset:")
+        if not accepted or not name.strip():
+            return
+        self.preset_store.save(name, self._preset_payload(entry))
+        self.picker.set_presets(self.preset_store.names())
+        self.picker.preset_combo.setCurrentText(" ".join(name.split()))
+        self.status.setText(f"Đã lưu preset “{' '.join(name.split())}”.")
+
+    def _apply_preset(self, name: str) -> None:
+        entry = self.queue.current_entry()
+        if entry is None or entry.report is None or not name:
+            return
+        payload = self.preset_store.load(name)
+        if payload is None:
+            self.status.setText("Không tìm thấy preset đã chọn.")
+            return
+        wanted = payload.get("candidates", [])
+        matched: set[str] = set()
+        for candidate in entry.report.candidates:
+            cx = (candidate.rect.x0 + candidate.rect.x1) / 2 / (entry.report.doc.page_width or 1)
+            cy = (candidate.rect.y0 + candidate.rect.y1) / 2 / (entry.report.doc.page_height or 1)
+            for selector in wanted:
+                center = selector.get("center", [99, 99])
+                same_position = (
+                    len(center) == 2
+                    and abs(cx - float(center[0])) < 0.08
+                    and abs(cy - float(center[1])) < 0.08
+                )
+                if (
+                    candidate.key == selector.get("key")
+                    or (
+                        candidate.text
+                        and candidate.text.strip().lower() == selector.get("text")
+                    )
+                    or (candidate.kind.value == selector.get("kind") and same_position)
+                ):
+                    matched.add(candidate.key)
+                    break
+        entry.selected = matched
+        entry.manual_regions = self._manual_from_template(
+            entry.report, list(payload.get("manual", []))
+        )
+        self.picker.set_selection(entry.selected)
+        self.preview.set_selection(entry.selected)
+        self.preview.set_manual_regions(entry.manual_regions)
+        self._refresh_safety(entry)
+        self.queue.update_entry(entry.path)
+        self._refresh_run_button()
+        self._render_current()
+        self.status.setText(
+            f"Đã áp dụng preset “{name}”: {len(matched)} watermark, "
+            f"{len(entry.manual_regions)} vùng thủ công."
+        )
 
     def _refresh_run_button(self) -> None:
         ready = [
             e
             for e in self.queue.entries.values()
-            if e.status in (Status.READY, Status.PENDING) and (e.selected or e.report is None)
+            if e.status in (Status.READY, Status.PENDING)
+            and (e.selected or e.manual_regions or e.report is None)
         ]
         self.run_btn.setEnabled(bool(ready))
 
     # -- run ---------------------------------------------------------------
 
     def _start_run(self) -> None:
-        entries = [e for e in self.queue.pending_for_run() if e.selected or e.report is None]
-        if not entries:
-            return
         current = self.queue.current_entry()
         if self.apply_all.isChecked() and current is not None and current.report:
             self.template_selection = [
@@ -462,9 +655,48 @@ class MainWindow(QWidget):
             self.template_was_auto = current.selected == set(
                 current.report.auto_selected_keys()
             )
+            self.template_manual = self._manual_template(current)
         else:
             self.template_selection = []
+            self.template_manual = []
             self.template_was_auto = False
+
+        pending = self.queue.pending_for_run()
+        use_template = bool(self.template_selection or self.template_manual)
+        entries = [
+            entry
+            for entry in pending
+            if use_template or entry.selected or entry.manual_regions or entry.report is None
+        ]
+        if not entries:
+            return
+
+        # Materialize the template for already analyzed files before the safety
+        # confirmation so its warning count covers the whole batch.
+        if use_template:
+            for entry in entries:
+                if entry.report is None:
+                    continue
+                if self.template_selection and not entry.selected:
+                    entry.selected = self._match_template(entry.report)
+                if self.template_manual and not entry.manual_regions:
+                    entry.manual_regions = self._manual_from_template(entry.report)
+                self.queue.update_entry(entry.path)
+
+        risky = sum(
+            region.risk_count for entry in entries for region in entry.manual_regions
+        )
+        if risky:
+            answer = QMessageBox.question(
+                self,
+                "Vùng thủ công có thể xóa nội dung",
+                f"Các vùng thủ công đang chạm khoảng {risky} nội dung nền trên các trang "
+                "đã kiểm tra. Bạn vẫn muốn tiếp tục?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
 
         self.run_queue = entries
         self.run_active = True
@@ -491,10 +723,12 @@ class MainWindow(QWidget):
         else:
             if self.template_selection and not entry.selected:
                 entry.selected = self._match_template(entry.report)
+            if self.template_manual and not entry.manual_regions:
+                entry.manual_regions = self._manual_from_template(entry.report)
             self._remove_entry(entry)
 
     def _remove_entry(self, entry: FileEntry) -> None:
-        if entry.report is None or not entry.selected:
+        if entry.report is None or not (entry.selected or entry.manual_regions):
             entry.status = Status.ERROR
             entry.message = "Không có mục nào được chọn."
             self.queue.update_entry(entry.path)
@@ -516,7 +750,12 @@ class MainWindow(QWidget):
         self.status.setText(f"Đang xử lý {entry.name} → {os.path.basename(dst)}")
 
         task = RemoveTask(
-            entry.path, dst, candidates, entry.report, self.aggressive.isChecked()
+            entry.path,
+            dst,
+            candidates,
+            list(entry.manual_regions),
+            entry.report,
+            self.aggressive.isChecked(),
         )
         task.signals.progress.connect(self._on_progress)
         task.signals.done.connect(self._on_removed)
@@ -540,10 +779,16 @@ class MainWindow(QWidget):
 
         if entry.report is not None:
             candidates = [c for c in entry.report.candidates if c.key in entry.selected]
-            pages = [h.page_no for c in candidates for h in c.hits][:VERIFY_SAMPLE]
+            pages = list(
+                dict.fromkeys(
+                    [h.page_no for c in candidates for h in c.hits]
+                    + [page for region in entry.manual_regions for page in region.pages]
+                )
+            )[:VERIFY_SAMPLE]
             if pages:
                 name = os.path.basename(run.dst)
-                task = VerifyTask(path, run.dst, pages, [c.rect for c in candidates])
+                rects = [c.rect for c in candidates] + [r.rect for r in entry.manual_regions]
+                task = VerifyTask(path, run.dst, pages, rects)
                 task.signals.done.connect(
                     lambda verdict: self.status.setText(f"Đã lưu {name}. {verdict}")
                 )
